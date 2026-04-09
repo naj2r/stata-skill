@@ -1,0 +1,15 @@
+#### Stata Code Quality (when reviewing .do files)
+- [ ] No bare `>` / `<` comparisons without `& !missing()` — missing value trap
+- [ ] Every `merge` followed by `tab _merge` and appropriate handling
+- [ ] `==` used for comparison (not `=`) in all `if` conditions
+- [ ] `bysort` used instead of bare `by`
+- [ ] Local macros use backtick-quote syntax: `` `localname' ``
+- [ ] `preserve`/`restore` properly paired
+- [ ] `tempvar`/`tempfile` used for temporaries (no pollution)
+- [ ] `capture` followed by `_rc` check
+- [ ] Factor variables use `i.` prefix for categorical
+- [ ] `graph export` (not `graph save`) for publication figures
+- [ ] Estimate store names ≤32 characters
+- [ ] Do-file header present (purpose, input, output, author, date)
+- [ ] `log using` at start, `log close` at end
+- [ ] No hardcoded absolute paths (use globals from paths.do)
