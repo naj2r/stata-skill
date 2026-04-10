@@ -3,64 +3,98 @@ name: stata
 description: "Working with Stata in CLI and do-file environments. Use this skill whenever the user mentions Stata, .do files, .dta files, .ado files, reghdfe, esttab, or any Stata command — even casually. Also trigger when the user asks to run regressions, clean data, or produce tables and the project context suggests Stata is the tool (e.g., existing .do files in the repo). Covers: invoking Stata from the terminal, writing and running do-files, reading Stata documentation PDFs efficiently, and integrating with existing project pipelines. If the user references Stata at all, use this skill."
 ---
 
-# Stata — CLI Execution, Do-Files, and Documentation
+# Stata Skill — CLI Execution, Do-Files, and Documentation
 
-## What is Stata?
+## Environment Auto-Detection
 
-Stata is a statistical software package widely used in economics, political science, and public health for data management, regression analysis, and reproducible research pipelines. Most economists interact with Stata through its GUI, but for automation and integration with tools like Claude Code, command-line (batch) execution is essential.
-
-## Environment: Nick's Setup
-
-- **Stata version:** Stata/MP 19 (StataNow)
-- **Executable:** `C:\Program Files\StataNow19\StataMP-64.exe`
-- **Shell:** Git Bash on Windows (`.bashrc` has Stata on PATH)
-- **Git Bash path:** `/c/Program Files/StataNow19/StataMP-64.exe`
-- **Documentation PDFs:** `C:\Program Files\StataNow19\docs\` (37 manuals — see reference list below)
-
-## Running Stata from the Command Line
-
-### Batch mode (run a do-file, no GUI)
-
-This is what you'll use most often. Stata runs the do-file and exits. Output goes to a `.log` file in the same directory as the do-file.
+Stata is detected automatically. The skill searches these locations in order:
 
 ```bash
-# From Git Bash:
-"/c/Program Files/StataNow19/StataMP-64.exe" /e do "path/to/myfile.do"
+# The first match wins:
+which stata-mp || which stata-se || which stata          # PATH lookup
+"/c/Program Files/StataNow19/StataMP-64.exe"             # Windows (Git Bash)
+"/c/Program Files/Stata19/StataMP-64.exe"                 # Windows alternate
+"/Applications/Stata/StataMP.app/Contents/MacOS/stata-mp" # macOS
+"/usr/local/stata/stata-mp"                               # Linux
 ```
 
-The `/e` flag tells Stata to run in batch (execute) mode — no GUI window, just process and exit. Stata writes a log file (`myfile.log`) alongside the do-file automatically.
+If none found, ask the user for their Stata installation path. Run `test-stata.sh` (in this skill's root) to verify detection.
 
-**Important details:**
-- Stata's working directory defaults to where the do-file lives unless you `cd` inside the do-file
-- If the do-file errors, Stata still exits — check the `.log` file for `r(...)` error codes
-- Batch mode does NOT display graph windows; use `graph export` to save figures to disk
+## Running Stata — Two Options
 
-### Interactive console mode
+### Option A: MCP-Stata (interactive, preferred when available)
 
+If the `stata` MCP server is running, use it directly — no `.do` files or `.bat` wrappers needed:
+```
+run_command("regress price mpg weight, robust")    // instant result as JSON
+get_stored_results()                                // r()/e() as structured data
+describe()                                          // variable metadata
+get_data(start=0, count=10)                         // browse rows
+export_graph(format="png")                          // save graphs
+```
+- **Persistent session:** data stays loaded between commands, no Stata restart overhead
+- **Structured output:** JSON results, no log parsing needed
+- **Lower token cost:** ~80-350 tokens/interaction vs ~200-700 for batch mode
+- See `reference/mcp-stata.md` for all 22 tools
+
+### Option B: Batch mode (always available, no extra setup)
+
+**Windows/Git Bash** — MUST use a temp `.bat` file. MSYS translates `/e` → `E:/` which breaks Stata.
 ```bash
-# Opens Stata in console mode (text-only, no GUI):
-"/c/Program Files/StataNow19/StataMP-64.exe" /q
+WIN_BIN=$(cygpath -w "$STATA_BIN")
+WIN_DO=$(cygpath -w "path/to/myfile.do")
+WIN_DIR=$(cygpath -w "$(pwd)")
+# Write temp .bat — runs in native cmd.exe, no MSYS mangling
+cat > /tmp/_run.bat << BATEOF
+@echo off
+cd /d "$WIN_DIR"
+"$WIN_BIN" /e do "$WIN_DO"
+BATEOF
+cmd //c "$(cygpath -w /tmp/_run.bat)"
+rm /tmp/_run.bat
+cat myfile.log    # Stata writes .log to CWD, not next to .do file
 ```
 
-The `/q` flag runs the console (quiet) version. Useful for quick checks but generally prefer batch mode for reproducibility.
+**macOS/Linux:**
+```bash
+"$STATA_BIN" -b do "path/to/myfile.do"
+cat myfile.log
+```
 
-### Quick one-liner pattern
+Key facts:
+- **Log location:** Stata writes `.log` to the **current working directory**, not next to the `.do` file
+- If do-file errors, Stata still exits — check `.log` for `r(...)` error codes
+- No graph windows in batch mode — use `graph export` to save figures
 
-For simple tasks (checking variable names, summarizing data), you can write a temporary do-file and run it:
-
+### Quick one-liner
 ```bash
 echo 'use "mydata.dta", clear
 describe
 summarize' > /tmp/quick_check.do
-"/c/Program Files/StataNow19/StataMP-64.exe" /e do "/tmp/quick_check.do"
-cat /tmp/quick_check.log
+
+# Windows Git Bash:
+cat > /tmp/_run.bat << BATEOF
+@echo off
+cd /d "$(cygpath -w /tmp)"
+"$(cygpath -w "$STATA_BIN")" /e do "$(cygpath -w /tmp/quick_check.do)"
+BATEOF
+cmd //c "$(cygpath -w /tmp/_run.bat)" && cat /tmp/quick_check.log
+
+# macOS/Linux:
+# (cd /tmp && "$STATA_BIN" -b do quick_check.do) && cat /tmp/quick_check.log
 ```
 
-## Writing Do-Files
+## Top-5 Gotchas (Always Remember)
 
-### Standard template
+1. **Missing = +infinity:** `x > 100` includes missing. Always add `& !missing(x)`
+2. **`==` for comparison:** `=` is assignment. `if status = 1` is WRONG → `if status == 1`
+3. **Check `_merge`:** After `merge`, always `tab _merge` before proceeding
+4. **Use `bysort`:** Bare `by var:` errors if not pre-sorted → `bysort var:`
+5. **Local macro syntax:** `` `name' `` (backtick + single-quote), NOT `$name`
 
-Every do-file should follow this structure (adapted from the project-level stata-code skill):
+For all 15+ gotchas with code examples: **read `reference/gotchas.md`**
+
+## Do-File Template
 
 ```stata
 /*==============================================================================
@@ -68,147 +102,87 @@ Every do-file should follow this structure (adapted from the project-level stata
  Purpose:  [What this script does]
  Input:    [What datasets/files it reads]
  Output:   [What datasets/files it creates]
- Author:   Nick Jensen
+ Author:   [Author name]
  Date:     [YYYY-MM-DD]
 ==============================================================================*/
 
-// --- Bootstrap (allows standalone execution) ---
+// --- Bootstrap (standalone execution support) ---
 capture log close
 if "$RB" == "" {
-    do "[absolute/path/to]/code/master/paths.do"
-    do "[absolute/path/to]/code/master/globals.do"
+    do "[path/to]/code/master/paths.do"
+    do "[path/to]/code/master/globals.do"
 }
 log using "$OUTPUT/logs/[NN]_[description].log", replace
 
 // --- Main code ---
-
 // [Your code here]
 
 // --- Cleanup ---
 log close
 ```
 
-The bootstrap preamble is important: it means the do-file works whether run from the master pipeline or standalone from the CLI.
+## Coding Conventions
 
-### Coding conventions
+- **Regressions:** `reghdfe depvar treatvar, absorb(unit_id year) vce(cluster unit_id)`
+- **Tables:** `esttab` to export `.tex` — follow existing project patterns
+- **Variable names:** `snake_case`
+- **Estimate store names:** ≤32 characters (hard limit)
+- **Data safety:** `preserve`/`restore`; `tempvar`/`tempfile` for temporaries
+- **Validation:** `assert` for data integrity (panel balance, expected row counts)
+- **String conversion:** Replace `"NA"` → `""` before `destring`
 
-- **Regressions:** Use `reghdfe` for two-way fixed effects: `reghdfe depvar treatvar, absorb(unit_id year) vce(cluster unit_id)`
-- **Tables:** Use `esttab` to export to `.tex`: follow the formatting pattern in existing project do-files
-- **Variable names:** `snake_case` (e.g., `treatment_var`, `outcome_var`)
-- **Estimate store names:** ≤32 characters (Stata hard limit)
-- **Data safety:** Use `preserve`/`restore` to protect data in memory
-- **Validation:** Include `assert` statements for data integrity (panel balance, expected row counts, treatment identities)
-- **Temp objects:** Always use `tempvar`/`tempfile` — never leave temporary objects behind
-- **String conversion:** When importing data with `"NA"` strings, replace to `""` before `destring`
-- **Group operations:** `egen` for group stats, `bysort` for within-group processing
+## Routing Table — Read On Demand
 
-### Output paths (project convention)
+Only load 1-2 reference files per task. All paths relative to this skill's directory.
 
-When working within a project that has `paths.do` and `globals.do`:
-- Tables for paper: `$TABLES/$TABLE_SUB/`
-- Raw data: `$DATA_RAW/`
-- Final data: `$DATA/`
-- Logs: `$OUTPUT/logs/`
-- Figures: `$OUTPUT/figures/`
+| Task | Read This File |
+|------|---------------|
+| Missing values, common bugs | `reference/gotchas.md` |
+| merge, reshape, collapse, append | `reference/data-management.md` |
+| reghdfe, IV, margins, post-estimation | `reference/regression.md` |
+| xtreg, panel diagnostics, xtset | `reference/panel-data.md` |
+| DiD, TWFE, csdid, event studies | `reference/did-event-study.md` |
+| esttab, estout, etable, LaTeX tables | `reference/tables-output.md` |
+| graph twoway, schemes, export | `reference/graphics.md` |
+| macros, loops, programs, Mata | `reference/programming.md` |
+| psmatch2, ivreg2, teffects | `reference/matching-iv.md` |
+| Stata PDF docs, pdfgrep, cheap-scan1 | `reference/documentation.md` |
+| MCP server (interactive Stata) | `reference/mcp-stata.md` |
 
-If the project doesn't have these globals, ask the user about their directory structure.
+### Technique Guides (end-to-end workflows)
 
-## Stata Documentation (PDFs)
+| Workflow | Read This File |
+|----------|---------------|
+| Full DiD/IV/matching analysis | `technique-guides/core-econometrics.md` |
+| Data cleaning pipeline | `technique-guides/data-prep.md` |
+| margins, coefplot, esttab workflow | `technique-guides/postestimation-reporting.md` |
+| Placebo, permutation, alt specs | `technique-guides/robustness-sensitivity.md` |
+| Reproducibility, logging, assertions | `technique-guides/best-practices.md` |
 
-Stata ships with extensive PDF documentation at `C:\Program Files\StataNow19\docs\`. These are large PDFs (some 30+ MB) — do NOT read them directly into context. Instead, use token-efficient extraction tools.
+## Escalation Protocol
 
-### Available manuals
+1. **FIRST ATTEMPT:** Use the routing table to read 1-2 reference files
+2. **IF DO-FILE FAILS:** Read `reference/gotchas.md` — check code against all 15 pitfalls
+3. **IF METHOD IS WRONG:** Read the relevant `technique-guides/*.md` for end-to-end workflow
+4. **IF STILL STUCK:** Search Stata PDF docs with pdfgrep (see `reference/documentation.md`)
+5. **IF REFERENCE GAP:** Log to `UPGRADE_LOG.md`:
+   ```
+   ## [date] — [topic] — [what was missing] — [suggested addition]
+   ```
 
-| File | Topic | Size |
-|------|-------|------|
-| `r.pdf` | Estimation/regression commands (largest manual) | 30 MB |
-| `bayes.pdf` | Bayesian analysis | 19 MB |
-| `gsm.pdf` | Getting Started (Mac) | 19 MB |
-| `g.pdf` | Graphics reference | 19 MB |
-| `gsu.pdf` | Getting Started (Unix) | 13 MB |
-| `gsw.pdf` | Getting Started (Windows) | 13 MB |
-| `xt.pdf` | Panel data / longitudinal (xt commands) | 12 MB |
-| `rpt.pdf` | Reporting and tables | 9 MB |
-| `me.pdf` | Marginal effects, margins, contrasts | 9 MB |
-| `pss.pdf` | Power, sample size, precision | 8 MB |
-| `st.pdf` | Survival analysis | 8 MB |
-| `ts.pdf` | Time series | 8 MB |
-| `d.pdf` | Data management commands | 8 MB |
-| `mv.pdf` | Multivariate statistics | 7 MB |
-| `causal.pdf` | Causal inference (DID, treatment effects) | 7 MB |
-| `adapt.pdf` | Adaptive designs | 5 MB |
-| `h2oml.pdf` | Machine learning (H2O integration) | 5 MB |
-| `tables.pdf` | Tables command reference | 5 MB |
-| `sem.pdf` | Structural equation modeling | 5 MB |
-| `sp.pdf` | Spatial analysis | 5 MB |
-| `m.pdf` | Mata programming language | 5 MB |
-| `i.pdf` | Base reference (index) | 6 MB |
-| `p.pdf` | Programming reference | 4 MB |
-| `irt.pdf` | Item response theory | 4 MB |
-| `meta.pdf` | Meta-analysis | 5 MB |
-| `lasso.pdf` | LASSO and elastic net | 3 MB |
-| `u.pdf` | User's Guide (core concepts) | 4 MB |
-| `mi.pdf` | Multiple imputation | 3 MB |
-| `erm.pdf` | Extended regression models | 3 MB |
-| `cm.pdf` | Choice models | 3 MB |
-| `bma.pdf` | Bayesian model averaging | 3 MB |
-| `dsge.pdf` | Dynamic stochastic general equilibrium | 3 MB |
-| `fn.pdf` | Functions reference | 3 MB |
-| `svy.pdf` | Survey data | 3 MB |
-| `ig.pdf` | Glossary and index | 2 MB |
-| `fmm.pdf` | Finite mixture models | 2 MB |
-| `stoc.pdf` | Stochastic frontier | 2 MB |
+## Stata Phase Protocol (for clo-author integration)
 
-### How to read Stata docs efficiently
+When working inside a clo-author project with the adversarial agent system:
 
-These PDFs are too large to read directly — they'll burn tokens or crash context. Use these approaches in order of preference:
+- **Phase 0 (Design):** Handled by strategist. No Stata-specific action.
+- **Phase 1 (Data):** data-engineer loads/inspects data. Read `reference/data-management.md`.
+- **Phase 2 (Specification):** Coder writes estimating equation. Read relevant reference file. Submit to coder-critic BEFORE running estimation.
+- **Phase 3 (Analysis):** Implement specification. Read `technique-guides/core-econometrics.md` if needed.
+- **Phase 4 (Robustness):** Read `technique-guides/robustness-sensitivity.md`. Implement all checks from strategy memo.
+- **Phase 5 (Output):** Read `reference/tables-output.md`. Produce publication-ready tables/figures.
 
-#### Option 1: cheap-scan1 (best for deep reading)
-
-If the project has the `cheap-scan1` skill available (check `.claude/skills/cheap-scan1/`), use it. It extracts text locally with pymupdf (zero tokens), triages relevance, and only sends relevant sections to the LLM. This is by far the most token-efficient approach for understanding a Stata manual section.
-
-```bash
-# Extract and process a specific Stata manual
-python ".claude/skills/cheap-scan1/extract_pdf.py" "/c/Program Files/StataNow19/docs/xt.pdf" "./stata_docs/scanned_xt/"
-```
-
-Then follow the cheap-scan1 protocol for staged reading.
-
-#### Option 2: split-pdf (fallback for scanned PDFs)
-
-If cheap-scan1 reports the PDF is a scanned image (unlikely for Stata docs, but possible), fall back to split-pdf which reads via vision in 4-page chunks:
-
-```python
-# Split into manageable chunks
-from PyPDF2 import PdfReader, PdfWriter
-# (see split-pdf skill for full script)
-```
-
-#### Option 3: Direct targeted search with pdfgrep/pdftotext
-
-For quick command lookups when you know what you're looking for:
-
-```bash
-# Search for a specific command across all Stata docs
-pdftotext "/c/Program Files/StataNow19/docs/r.pdf" - | grep -i "reghdfe" -A 5
-
-# Or use pdfgrep if installed
-pdfgrep -i "margins" "/c/Program Files/StataNow19/docs/me.pdf" | head -20
-```
-
-#### Which manual to check
-
-For applied microeconometrics work, the most commonly needed manuals are:
-
-- **`r.pdf`** — All estimation commands (reg, ivregress, probit, logit, etc.)
-- **`xt.pdf`** — Panel data: xtreg, xtlogit, xtpoisson, xtdidregress
-- **`causal.pdf`** — DID, treatment effects, inverse probability weighting
-- **`d.pdf`** — Data management: merge, reshape, collapse, encode
-- **`me.pdf`** — margins, marginsplot, contrasts
-- **`tables.pdf`** — collect, table, etable (Stata 17+ table system)
-- **`u.pdf`** — Core concepts (estimation postcommands, factor variables, etc.)
-- **`p.pdf`** — Programming: macros, loops, programs, mata
+Each phase flows through coder → coder-critic automatically. Pass `--deliberate` to pause between phases for user input.
 
 ## Integration Notes
 
-This skill is scoped at the **user level** — it's available in every Claude Code session regardless of project. Individual projects may also have a project-level `stata-code` skill (in `.claude/skills/stata-code/`) with project-specific conventions (path globals, pipeline numbering, specific table formats). When both exist, defer to the project-level skill for project-specific conventions and use this skill for general Stata knowledge, CLI invocation, and documentation lookup.
+This skill is **user-level** — available in every Claude Code session. Projects may also have project-level overrides in `.claude/skills/stata/` with project-specific conventions. When both exist, defer to project-level for project conventions; use this for general Stata knowledge.
